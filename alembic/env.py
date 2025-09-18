@@ -18,6 +18,7 @@ from core.base import Base
 # Make sure all your models are imported here so Base knows about them
 # For example: from app.models.user import User
 
+from components.auth.models import User, BlacklistedToken ,SecurityEvent # Example import
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config

@@ -3,7 +3,7 @@ from fastapi import FastAPI,Request
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
+from components.auth import router as auth_router
 
 
 #Import your application's components
@@ -83,7 +83,7 @@ if settings.ALLOWED_ORIGINS:
     )
     logger.info(f"CORS Middleware configured for origins: {settings.ALLOWED_ORIGINS}")
 
-
+app.include_router(auth_router.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Authentication"])
 @app.get("/",tags=["Root"])
 async def read_root():
     return {"message": "Welcome to the Editors Dashboard API"}

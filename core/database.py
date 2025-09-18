@@ -10,10 +10,10 @@ logger =logging.getLogger(__name__)
 #create async engine
 engine = create_async_engine(
     settings.DATABASE_URL,
-    pool_size=50,
-    max_overflow=10,
-    pool_timeout=30,
-    pool_recycle=3600,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT,
+    pool_recycle=settings.DB_POOL_CYCLE,
     echo=settings.Debug,
 )
 
