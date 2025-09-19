@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_HOURS : int = int(os.getenv("ACCESS_TOKEN_EXPIRE_HOURS","12"))
     
+    #telegram bot token 
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN")
+    
+    
+    # API VIDEO KEy
+    API_VIDEO_KEY: str = os.getenv("API_VIDEO_KEY")
+    
+    
+    
     
     #Password Security
     BCRYPT_ROUNDS: int=int(os.getenv("BCRYPT_ROUNDS","12"))

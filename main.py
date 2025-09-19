@@ -3,10 +3,17 @@ from fastapi import FastAPI,Request
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+
+
+
+#Import of application's components files
 from components.auth import router as auth_router
+from components.telegram import router as telegram_router
 
 
-#Import your application's components
+
+#Import of application's core files 
 from core.config import settings ,Settings
 from core.database import engine
 from core.base import Base
@@ -84,6 +91,9 @@ if settings.ALLOWED_ORIGINS:
     logger.info(f"CORS Middleware configured for origins: {settings.ALLOWED_ORIGINS}")
 
 app.include_router(auth_router.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Authentication"])
+
+app.include_router(telegram_router.router, tags=["Telegram Webhook"])
+
 @app.get("/",tags=["Root"])
 async def read_root():
     return {"message": "Welcome to the Editors Dashboard API"}
