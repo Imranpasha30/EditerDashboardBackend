@@ -16,6 +16,7 @@ class Volunteer(Base):
     last_name = Column(String(100), nullable=True)
     username = Column(String(50), nullable=True, index=True)
     phone_number = Column(String(20), unique=True, nullable=True, index=True)
+    phone_verified= Column(Boolean ,default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

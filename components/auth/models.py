@@ -26,7 +26,16 @@ class User(Base):
     
     # Security
     password = Column(String(255), nullable=False)
-    role = Column(Enum(UserRole), default=UserRole.NOT_SELECTED, nullable=False)
+    role = Column(
+        Enum(
+            UserRole,
+            name="userrole",             # match DB type name
+            native_enum=True,            # use PG enum
+            validate_strings=True        # catch invalid labels early
+        ),
+        default=UserRole.NOT_SELECTED,
+        nullable=False
+    )
     
     # Account status
     is_active = Column(Boolean, default=True)

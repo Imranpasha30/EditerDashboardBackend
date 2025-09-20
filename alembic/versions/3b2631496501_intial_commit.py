@@ -1,8 +1,8 @@
 """intial commit
 
-Revision ID: df6e48ea1e7b
+Revision ID: 3b2631496501
 Revises: 
-Create Date: 2025-09-19 11:54:53.196658
+Create Date: 2025-09-20 12:46:10.001710
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'df6e48ea1e7b'
+revision: str = '3b2631496501'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -50,7 +50,7 @@ def upgrade() -> None:
     sa.Column('email', sa.String(length=100), nullable=False),
     sa.Column('phone_number', sa.String(length=15), nullable=True),
     sa.Column('password', sa.String(length=255), nullable=False),
-    sa.Column('role', sa.Enum('USER', 'EDITOR', 'MANAGER', 'ADMIN', name='userrole'), nullable=False),
+    sa.Column('role', sa.Enum('USER', 'EDITOR', 'MANAGER', 'ADMIN', 'NOT_SELECTED', name='userrole'), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=True),
     sa.Column('is_verified', sa.Boolean(), nullable=True),
     sa.Column('last_login', sa.DateTime(), nullable=True),
@@ -67,6 +67,7 @@ def upgrade() -> None:
     sa.Column('last_name', sa.String(length=100), nullable=True),
     sa.Column('username', sa.String(length=50), nullable=True),
     sa.Column('phone_number', sa.String(length=20), nullable=True),
+    sa.Column('phone_verified', sa.Boolean(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=True),
     sa.Column('updated_at', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id')
@@ -93,6 +94,8 @@ def upgrade() -> None:
     sa.Column('status', sa.Enum('PROCESSING', 'PENDING_REVIEW', 'ACCEPTED', 'ASSIGNED', 'DECLINED', 'USED', name='submissionstatus'), nullable=False),
     sa.Column('assigned_editor_id', sa.UUID(), nullable=True),
     sa.Column('decline_reason', sa.String(), nullable=True),
+    sa.Column('notification_sent', sa.Boolean(), nullable=True),
+    sa.Column('notification_sent_at', sa.DateTime(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=True),
     sa.Column('updated_at', sa.DateTime(), nullable=True),
     sa.ForeignKeyConstraint(['assigned_editor_id'], ['users.user_id'], ),
