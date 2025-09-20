@@ -1,5 +1,3 @@
-# D:\EditerDashboard\components\managerDashboard\router.py
-
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
@@ -7,7 +5,7 @@ from core.database import get_db
 # from components.auth.dependencies import require_manager_role 
 from components.auth.models import User
 from components.submissions.models import VideoSubmission, SubmissionStatus
-from typing import List
+from typing import List, Optional
 import asyncio
 from sse_starlette.sse import EventSourceResponse
 import logging
@@ -18,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 # Global list to hold SSE clients
 sse_clients: List[asyncio.Queue] = []
+
+# Default manager ID (temporary until auth is complete)
+DEFAULT_MANAGER_ID = "2ef0b39b-789a-48cd-8db8-0ab7859cff6d"
 
 @router.get("/dashboard-data", response_model=None)
 async def get_initial_dashboard_data(
@@ -86,10 +87,11 @@ async def dashboard_event_stream(
     return EventSourceResponse(event_generator())
 
 @router.post("/update-submission-status")
-async def update_submission(
+async def update_submission_status(
     submission_id: str,
     new_status: str,
-    assigned_editor_id: str = None,
+    assigned_editor_id: Optional[str] = None,
+    decline_reason: Optional[str] = None,
     # The dependency has been removed to allow unauthenticated access
     db: AsyncSession = Depends(get_db)
 ):
@@ -98,10 +100,19 @@ async def update_submission(
     """
     try:
         from components.managerDashboard.service import ManagerService
-        updated_submission = await ManagerService.update_submission_status(
-            db, submission_id, new_status, assigned_editor_id
-        )
+        
+        # Handle decline reason if provided
+        if decline_reason and new_status == "DECLINED":
+            updated_submission = await ManagerService.update_submission_status_with_reason(
+                db, submission_id, new_status, assigned_editor_id, DEFAULT_MANAGER_ID, decline_reason
+            )
+        else:
+            updated_submission = await ManagerService.update_submission_status(
+                db, submission_id, new_status, assigned_editor_id, DEFAULT_MANAGER_ID
+            )
+        
         return {"message": "Submission updated successfully", "success": True}
+        
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -114,4 +125,40 @@ async def update_submission(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update submission status"
+        )
+
+@router.get("/editor-workload")
+async def get_editor_workload(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get editor workload information for the sidebar.
+    """
+    try:
+        from components.managerDashboard.service import ManagerService
+        workload = await ManagerService.get_editor_workload(db)
+        return {"workload": workload}
+    except Exception as e:
+        logger.error(f"Failed to get editor workload: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get editor workload"
+        )
+
+@router.get("/assignment-counts")
+async def get_assignment_counts(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get assignment counts for dashboard statistics.
+    """
+    try:
+        from components.managerDashboard.service import ManagerService
+        counts = await ManagerService.get_assignment_counts(db)
+        return counts
+    except Exception as e:
+        logger.error(f"Failed to get assignment counts: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get assignment counts"
         )
