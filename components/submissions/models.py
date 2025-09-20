@@ -47,6 +47,8 @@ class VideoSubmission(Base):
     
     assigned_editor_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
     decline_reason = Column(String, nullable=True)
+    notification_sent=Column(Boolean,default=False)
+    notification_sent_at=Column(DateTime,nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
