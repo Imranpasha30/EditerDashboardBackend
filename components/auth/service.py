@@ -40,7 +40,7 @@ class AuthService:
             email=editor_data.email,
             phone_number=editor_data.phone_number,
             password=security.get_password_hash(editor_data.password),
-            role=UserRole.EDITOR,  # Set role to EDITOR
+            role=UserRole.NOT_SELECTED,  
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
         )

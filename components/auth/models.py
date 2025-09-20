@@ -10,7 +10,7 @@ class UserRole(PyEnum):
     EDITOR = "EDITOR" 
     MANAGER = "MANAGER"
     ADMIN = "ADMIN"
-    NOT_SELECTED=" NOT_SELECTED"
+    NOT_SELECTED="NOT_SELECTED"
 
 class User(Base):
     __tablename__ = "users"
