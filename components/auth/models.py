@@ -4,6 +4,7 @@ from core.base import Base
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
+from sqlalchemy.orm import relationship
 
 class UserRole(PyEnum):
     USER = "USER"
@@ -47,6 +48,16 @@ class User(Base):
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    managed_assignments = relationship(
+        "VideoAssignment", 
+        foreign_keys="VideoAssignment.assigned_manager_id",
+        back_populates="assigned_manager"
+    )
+    editor_assignments = relationship(
+        "VideoAssignment", 
+        foreign_keys="VideoAssignment.assigned_editor_id",
+        back_populates="assigned_editor"
+    )
 
     def __repr__(self):
         return f"<User(username='{self.username}', email='{self.email}', role='{self.role.value}')>"
