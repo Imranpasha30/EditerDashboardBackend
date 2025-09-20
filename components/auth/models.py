@@ -10,6 +10,7 @@ class UserRole(PyEnum):
     EDITOR = "EDITOR" 
     MANAGER = "MANAGER"
     ADMIN = "ADMIN"
+    NOT_SELECTED=" NOT_SELECTED"
 
 class User(Base):
     __tablename__ = "users"
@@ -25,7 +26,7 @@ class User(Base):
     
     # Security
     password = Column(String(255), nullable=False)
-    role = Column(Enum(UserRole), default=UserRole.USER, nullable=False)
+    role = Column(Enum(UserRole), default=UserRole.NOT_SELECTED, nullable=False)
     
     # Account status
     is_active = Column(Boolean, default=True)
