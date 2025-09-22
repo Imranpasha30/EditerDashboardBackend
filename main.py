@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from components.auth import router as auth_router
 from components.telegram import router as telegram_router
 from components.managerDashboard.router import router as manager_router # Correct import
+from components.editorDashboard.router import router as editor_router
 
 # Import of application's core files
 from core.config import settings
@@ -106,6 +107,7 @@ if settings.ALLOWED_ORIGINS:
 app.include_router(auth_router.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Authentication"])
 app.include_router(telegram_router.router, tags=["Telegram Webhook"])
 app.include_router(manager_router, prefix="/api/v1/manager")
+app.include_router(editor_router, prefix="/api/v1/editor")
 
 @app.get("/", tags=["Root"])
 async def read_root():
