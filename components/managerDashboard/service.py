@@ -474,12 +474,107 @@ async def listen_and_broadcast_updates(db_url: str):
     """
     Listens for PostgreSQL NOTIFY events and broadcasts them to SSE clients.
     """
-    # Import inside function to avoid circular dependency
-    from components.managerDashboard.router import sse_clients
+    # Import both client lists
+    from components.managerDashboard.router import sse_clients as manager_clients
+    from components.editorDashboard.router import editor_sse_clients
     import asyncpg
     
     conn = None
     notification_queue = asyncio.Queue()
+    
+    def notification_handler(connection, pid, channel, payload):
+        """Handle incoming notifications from PostgreSQL"""
+        try:
+            parsed_payload = json.loads(payload)
+            logger.info(f"📡 Received notification from PID {pid} on channel '{channel}': {parsed_payload}")
+            
+            sse_message = {
+                "event": "dashboard-update" if channel == "video_updates" else "editor-update",
+                "data": json.dumps(parsed_payload)
+            }
+            
+            try:
+                notification_queue.put_nowait((channel, sse_message))
+            except asyncio.QueueFull:
+                logger.warning("⚠️ Notification queue is full, dropping notification")
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse notification payload: {e}")
+        except Exception as e:
+            logger.error(f"💥 Error handling notification: {e}")
+    
+    try:
+        conn = await asyncpg.connect(db_url)
+        await conn.add_listener('video_updates', notification_handler)
+        await conn.add_listener('editor_updates', notification_handler)
+        logger.info("🔗 Connected to PostgreSQL and listening for notifications on both channels.")
+
+        while True:
+            try:
+                channel, sse_message = await asyncio.wait_for(
+                    notification_queue.get(), 
+                    timeout=30.0
+                )
+                
+                # Broadcast to appropriate clients based on channel
+                if channel == "video_updates":
+                    # Broadcast to manager clients
+                    clients_to_remove = []
+                    for client_queue in manager_clients:
+                        try:
+                            client_queue.put_nowait(sse_message)
+                        except asyncio.QueueFull:
+                            logger.warning("⚠️ Manager client queue is full")
+                        except Exception as e:
+                            logger.error(f"❌ Error sending to manager client: {e}")
+                            clients_to_remove.append(client_queue)
+                    
+                    for client_queue in clients_to_remove:
+                        if client_queue in manager_clients:
+                            manager_clients.remove(client_queue)
+                    
+                    logger.info(f"📡 Broadcasted manager update to {len(manager_clients)} clients")
+                
+                elif channel == "editor_updates":
+                    # Broadcast to editor clients
+                    clients_to_remove = []
+                    for client_queue in editor_sse_clients:
+                        try:
+                            client_queue.put_nowait(sse_message)
+                        except asyncio.QueueFull:
+                            logger.warning("⚠️ Editor client queue is full")
+                        except Exception as e:
+                            logger.error(f"❌ Error sending to editor client: {e}")
+                            clients_to_remove.append(client_queue)
+                    
+                    for client_queue in clients_to_remove:
+                        if client_queue in editor_sse_clients:
+                            editor_sse_clients.remove(client_queue)
+                    
+                    logger.info(f"📡 Broadcasted editor update to {len(editor_sse_clients)} clients")
+                        
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                logger.info("🔚 PostgreSQL listener task was cancelled")
+                break
+            except Exception as e:
+                logger.error(f"💥 Error processing notifications: {e}")
+                await asyncio.sleep(5)
+                
+    except asyncio.CancelledError:
+        logger.info("🔚 PostgreSQL listener shutdown requested")
+    except Exception as e:
+        logger.error(f"💥 PostgreSQL listener failed: {e}")
+    finally:
+        if conn and not conn.is_closed():
+            try:
+                await conn.remove_listener('video_updates', notification_handler)
+                await conn.remove_listener('editor_updates', notification_handler)
+                await conn.close()
+                logger.info("🔗 PostgreSQL connection closed")
+            except Exception as e:
+                logger.error(f"❌ Error closing PostgreSQL connection: {e}")
+
     
     def notification_handler(connection, pid, channel, payload):
         """Handle incoming notifications from PostgreSQL"""
