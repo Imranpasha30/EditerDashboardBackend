@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.security import OAuth2PasswordRequestForm
 from core.database import get_db
@@ -484,3 +484,59 @@ async def update_user_details(
     await db.commit()
     return MessageResponse(message=f"User {user_to_update.username} has been successfully updated.")
 
+# Add this to your router.py file
+
+@router.post("/validate-access", response_model=dict)
+async def validate_route_access(
+    request: Request,
+    path_data: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Validate if current user has access to requested path
+    This provides server-side route protection
+    """
+    requested_path = path_data.get("requested_path", "")
+    
+    # Define role-based path access rules
+    path_permissions = {
+        "/admin": ["ADMIN"],
+        "/managerdashboard": ["MANAGER", "ADMIN"],
+        "/editordashboard": ["EDITOR", "MANAGER", "ADMIN"],
+        "/user": ["USER", "EDITOR", "MANAGER", "ADMIN"]
+    }
+    
+    # Check if user has permission for requested path
+    has_permission = False
+    for path_prefix, allowed_roles in path_permissions.items():
+        if requested_path.startswith(path_prefix):
+            has_permission = current_user.role.value in allowed_roles
+            break
+    else:
+        # Default: allow access to paths not specifically restricted
+        has_permission = True
+    
+    # Log access attempt
+    await AuthService.log_security_event(
+        event_type="route_access_check",
+        user_id=str(current_user.user_id),
+        request=request,
+        db=db,
+        details={
+            "requested_path": requested_path,
+            "user_role": current_user.role.value,
+            "permission_granted": has_permission
+        },
+        severity="info"
+    )
+    
+    return {
+        "valid": True,
+        "has_permission": has_permission,
+        "user": {
+            "id": str(current_user.user_id),
+            "username": current_user.username,
+            "role": current_user.role.value
+        }
+    }

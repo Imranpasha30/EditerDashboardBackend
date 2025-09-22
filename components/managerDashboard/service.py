@@ -1,5 +1,3 @@
-# D:\EditerDashboard\components\managerDashboard\service.py
-
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import update, func
@@ -170,7 +168,6 @@ class ManagerService:
             logger.info(f"✅ Successfully updated submission {submission_id} from {old_status} to {new_status}")
             logger.info(f"=== UPDATE SUBMISSION STATUS END ===")
             
-            # The database trigger will handle the notification
             return submission
             
         except ValueError as e:
@@ -275,7 +272,7 @@ class ManagerService:
                 logger.error(f"❌ Invalid editor ID format: {editor_id}")
                 raise ValueError(f"Invalid editor ID format: {editor_id}")
             
-            # Use default manager if not provided
+            # Use provided manager_id or find a default manager
             if not manager_id:
                 logger.info("🔍 No manager ID provided, looking for default manager...")
                 result = await db.execute(
@@ -469,7 +466,7 @@ class ManagerService:
             logger.error(f"Error fetching editor workload: {e}")
             return []
 
-
+# ✅ Updated broadcast function for manager clients
 async def listen_and_broadcast_updates(db_url: str):
     """
     Listens for PostgreSQL NOTIFY events and broadcasts them to SSE clients.
@@ -568,93 +565,6 @@ async def listen_and_broadcast_updates(db_url: str):
     finally:
         if conn and not conn.is_closed():
             try:
-                await conn.remove_listener('video_updates', notification_handler)
-                await conn.remove_listener('editor_updates', notification_handler)
-                await conn.close()
-                logger.info("🔗 PostgreSQL connection closed")
-            except Exception as e:
-                logger.error(f"❌ Error closing PostgreSQL connection: {e}")
-
-    
-    def notification_handler(connection, pid, channel, payload):
-        """Handle incoming notifications from PostgreSQL"""
-        try:
-            # Parse the JSON payload
-            parsed_payload = json.loads(payload)
-            logger.info(f"📡 Received notification from PID {pid} on channel '{channel}': {parsed_payload}")
-            
-            # Create a properly formatted SSE message
-            sse_message = {
-                "event": "dashboard-update",
-                "data": json.dumps(parsed_payload)
-            }
-            
-            # Put the notification in the queue for processing
-            try:
-                notification_queue.put_nowait(sse_message)
-            except asyncio.QueueFull:
-                logger.warning("⚠️ Notification queue is full, dropping notification")
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ Failed to parse notification payload: {e}")
-        except Exception as e:
-            logger.error(f"💥 Error handling notification: {e}")
-    
-    try:
-        # Connect to PostgreSQL using asyncpg
-        conn = await asyncpg.connect(db_url)
-        
-        # Add notification listeners for both channels
-        await conn.add_listener('video_updates', notification_handler)
-        await conn.add_listener('editor_updates', notification_handler)
-        logger.info("🔗 Connected to PostgreSQL and listening for notifications on 'video_updates' and 'editor_updates' channels.")
-
-        # Main loop to process notifications and broadcast to SSE clients
-        while True:
-            try:
-                # Wait for notifications with a timeout to allow for graceful cancellation
-                sse_message = await asyncio.wait_for(
-                    notification_queue.get(), 
-                    timeout=30.0
-                )
-                
-                # Broadcast the message to all connected SSE clients
-                clients_to_remove = []
-                for client_queue in sse_clients:
-                    try:
-                        # Use put_nowait to avoid blocking
-                        client_queue.put_nowait(sse_message)
-                    except asyncio.QueueFull:
-                        logger.warning("⚠️ Client queue is full, skipping update for a client.")
-                    except Exception as e:
-                        logger.error(f"❌ Error sending message to client: {e}")
-                        clients_to_remove.append(client_queue)
-                
-                # Remove dead clients
-                for client_queue in clients_to_remove:
-                    if client_queue in sse_clients:
-                        sse_clients.remove(client_queue)
-                
-                logger.info(f"📡 Broadcasted update to {len(sse_clients)} SSE clients")
-                        
-            except asyncio.TimeoutError:
-                # Timeout is expected - this allows for graceful cancellation
-                continue
-            except asyncio.CancelledError:
-                logger.info("🔚 PostgreSQL listener task was cancelled")
-                break
-            except Exception as e:
-                logger.error(f"💥 Error processing notifications: {e}")
-                # Wait a bit before retrying to avoid rapid loops
-                await asyncio.sleep(5)
-                
-    except asyncio.CancelledError:
-        logger.info("🔚 PostgreSQL listener shutdown requested")
-    except Exception as e:
-        logger.error(f"💥 PostgreSQL listener failed: {e}")
-    finally:
-        if conn and not conn.is_closed():
-            try:
-                # Remove the listeners before closing the connection
                 await conn.remove_listener('video_updates', notification_handler)
                 await conn.remove_listener('editor_updates', notification_handler)
                 await conn.close()
