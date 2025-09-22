@@ -117,7 +117,7 @@ class AuthService:
         credentials: UserLogin, 
         db: AsyncSession, 
         request: Request = None,
-        required_role: Optional[UserRole] = None # This is used by other internal functions
+        required_role: Optional[UserRole] = None
     ) -> User:
         """
         Authenticate a user with comprehensive checks for active status, role, and verification.
@@ -140,8 +140,6 @@ class AuthService:
                 detail="This account has been deactivated."
             )
         
-        # --- THIS IS THE NEW, CRITICAL LOGIC ---
-
         # 3. Block any user whose role has not been assigned yet.
         if user.role == UserRole.NOT_SELECTED:
             await AuthService.log_security_event(
@@ -168,8 +166,6 @@ class AuthService:
                 detail="Your account has not been verified by an administrator yet."
             )
             
-        # --- END OF NEW LOGIC ---
-
         # This check is for internal use by functions like `authenticate_editor`
         if required_role and user.role != required_role:
             raise HTTPException(
@@ -234,7 +230,7 @@ class AuthService:
         device_info: str = None, 
         ip_address: str = None
     ) -> Dict[str, Any]:
-        """Create access token with role-based claims"""
+        """Create access token with role-based claims and secure redirect URL"""
         
         # Determine token expiration
         if remember_me:
@@ -242,16 +238,19 @@ class AuthService:
         else:
             expire_hours = settings.ACCESS_TOKEN_EXPIRE_HOURS
         
-        # Create token with user and role information
+        # Create token with minimal user information (no role in payload for security)
         access_token = security.create_access_token(
             data={
                 "user_id": str(user.user_id),
                 "username": user.username,
-                "role": user.role.value,
-                "full_name": user.full_name
+                "full_name": user.full_name,
+                "is_verified": user.is_verified
             },
             expires_delta=timedelta(hours=expire_hours)
         )
+        
+        # Determine redirect URL based on user role (SERVER-SIDE DECISION)
+        redirect_url = AuthService._get_dashboard_url(user)
         
         logger.info(f"Token created for {user.role.value}: {user.username}")
         
@@ -259,9 +258,26 @@ class AuthService:
             "access_token": access_token,
             "token_type": "bearer",
             "expires_in": expire_hours * 3600,  # Convert to seconds
-            "role": user.role,
+            "redirect_url": redirect_url,  # SERVER DETERMINES WHERE TO GO
             "user_id": str(user.user_id)
         }
+
+    @staticmethod
+    def _get_dashboard_url(user: User) -> str:
+        """Determine appropriate dashboard URL based on user role - SECURE SERVER-SIDE LOGIC"""
+        
+        # Server-side role-based routing - cannot be manipulated by client
+        if user.role == UserRole.ADMIN:
+            return "/admin/dashboard"
+        elif user.role == UserRole.MANAGER:
+            return "/managerdashboard"
+        elif user.role == UserRole.EDITOR:
+            return "/editordashboard"
+        elif user.role == UserRole.USER:
+            return "/user/dashboard"
+        else:
+            # This should never happen due to our authentication checks
+            return "/unauthorized"
 
     @staticmethod
     async def logout_user(user: User, token: str, db: AsyncSession, request: Request = None) -> None:

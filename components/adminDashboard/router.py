@@ -1,13 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from components.auth.models import User, UserRole
+from components.auth.dependencies import get_current_user, require_admin_role
+from core.security import security
 from typing import List, Optional
 import asyncio
 from sse_starlette.sse import EventSourceResponse
 import logging
 import json
 from pydantic import BaseModel, EmailStr
+from uuid import UUID
 
 router = APIRouter(tags=["Admin Dashboard"])
 logger = logging.getLogger(__name__)
@@ -25,14 +28,85 @@ class UpdateUserRoleRequest(BaseModel):
     user_id: str
     new_role: str
 
+# ✅ Custom dependency for SSE token authentication
+async def get_current_user_from_token_param(
+    token: str = Query(..., description="JWT token for SSE authentication"),
+    db: AsyncSession = Depends(get_db)
+) -> User:
+    """
+    Authenticate user from token query parameter (for SSE endpoints)
+    SSE cannot use Authorization headers, so we use query parameters
+    """
+    try:
+        # Verify and decode token with blacklist check
+        payload = await security.verify_token(token, db=db, token_type="access")
+        user_id: str = payload.get("user_id")
+        
+        if user_id is None:
+            logger.error("No user_id in SSE token payload")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
+        # Convert to UUID
+        try:
+            user_uuid = UUID(user_id)
+        except ValueError:
+            logger.error(f"Invalid UUID in SSE token: {user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Get user from database
+        result = await db.get(User, user_uuid)
+        if not result:
+            logger.error(f"User not found with ID: {user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        if not result.is_active:
+            logger.warning(f"Inactive user attempted SSE access: {user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Inactive user account"
+            )
+
+        # Check if user has admin privileges
+        if result.role != UserRole.ADMIN:
+            logger.warning(f"Non-admin user attempted admin SSE access: {user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin privileges required"
+            )
+            
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"SSE Token verification failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
 @router.get("/dashboard-data", response_model=None)
 async def get_admin_dashboard_data(
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Fetches all initial data for the admin dashboard.
+    Fetches all initial data for the authenticated admin's dashboard.
     """
-    logger.info("Fetching admin dashboard data")
+    admin_id = str(current_user.user_id)
+    logger.info(f"Fetching admin dashboard data for admin: {current_user.username} (ID: {admin_id})")
     
     from components.adminDashboard.service import AdminService
     
@@ -46,7 +120,19 @@ async def get_admin_dashboard_data(
         assignments = await AdminService.get_all_assignments(db)
         users = await AdminService.get_all_users(db)
         
-        logger.info("✅ Successfully fetched all admin dashboard data")
+        # Get admin profile info - use current_user data directly
+        admin_profile = {
+            "user_id": str(current_user.user_id),
+            "full_name": current_user.full_name,
+            "username": current_user.username,
+            "email": current_user.email,
+            "role": current_user.role.value,
+            "is_verified": current_user.is_verified,
+            "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
+            "created_at": current_user.created_at.isoformat() if current_user.created_at else None
+        }
+        
+        logger.info(f"✅ Successfully fetched all admin dashboard data for {current_user.username}")
         
         return {
             "overview": overview,
@@ -55,7 +141,8 @@ async def get_admin_dashboard_data(
             "volunteer_performance": volunteer_performance,
             "recent_submissions": recent_submissions,
             "assignments": assignments,
-            "users": users
+            "users": users,
+            "admin_profile": admin_profile
         }
         
     except HTTPException as e:
@@ -71,22 +158,26 @@ async def get_admin_dashboard_data(
 @router.get("/dashboard-stream")
 async def admin_dashboard_stream(
     request: Request,
+    current_user: User = Depends(get_current_user_from_token_param),  # ✅ Use token param auth
     db: AsyncSession = Depends(get_db)
 ):
     """
     Establishes an SSE connection for real-time admin dashboard updates.
+    Uses token from query parameter since SSE doesn't support custom headers.
     """
+    admin_id = str(current_user.user_id)
+    
     # Create a new Queue for this admin client
     client_queue = asyncio.Queue()
     admin_sse_clients.append(client_queue)
     
-    logger.info("New Admin SSE client connected")
+    logger.info(f"✅ New Admin SSE client connected for admin: {current_user.username} (ID: {admin_id})")
 
     async def event_generator():
         try:
             while True:
                 if await request.is_disconnected():
-                    logger.info("Admin SSE client disconnected.")
+                    logger.info(f"Admin SSE client disconnected for {current_user.username}.")
                     break
                 
                 try:
@@ -94,7 +185,7 @@ async def admin_dashboard_stream(
                     message = await asyncio.wait_for(client_queue.get(), timeout=30.0)
                     
                     if isinstance(message, dict):
-                        logger.info(f"📡 Sending admin update: {message.get('event', 'unknown')}")
+                        logger.info(f"📡 Sending admin update to {current_user.username}: {message.get('event', 'unknown')}")
                         yield {
                             "event": message.get("event", "update"),
                             "data": message.get("data", "")
@@ -109,12 +200,13 @@ async def admin_dashboard_stream(
             # Clean up the queue when client disconnects
             if client_queue in admin_sse_clients:
                 admin_sse_clients.remove(client_queue)
-                logger.info("Admin SSE client queue removed from active clients.")
+                logger.info(f"Admin SSE client queue removed for {current_user.username}.")
 
     return EventSourceResponse(event_generator())
 
 @router.get("/analytics/overview")
 async def get_analytics_overview(
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -123,7 +215,7 @@ async def get_analytics_overview(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info("📊 Fetching analytics overview")
+        logger.info(f"📊 Fetching analytics overview for admin {current_user.username}")
         overview = await AdminService.get_dashboard_overview(db)
         
         return {"overview": overview}
@@ -138,6 +230,7 @@ async def get_analytics_overview(
 @router.get("/analytics/daily-submissions")
 async def get_daily_submissions_analytics(
     days: Optional[int] = 7,
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -146,7 +239,7 @@ async def get_daily_submissions_analytics(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info(f"📈 Fetching daily submissions analytics for {days} days")
+        logger.info(f"📈 Fetching daily submissions analytics for {days} days by admin {current_user.username}")
         daily_data = await AdminService.get_daily_submissions_data(db, days)
         
         return {"daily_submissions": daily_data}
@@ -160,6 +253,7 @@ async def get_daily_submissions_analytics(
 
 @router.get("/analytics/performance")
 async def get_performance_analytics(
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -168,7 +262,7 @@ async def get_performance_analytics(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info("🎯 Fetching performance analytics")
+        logger.info(f"🎯 Fetching performance analytics for admin {current_user.username}")
         editor_performance = await AdminService.get_editor_performance_data(db)
         volunteer_performance = await AdminService.get_volunteer_performance_data(db)
         
@@ -186,6 +280,7 @@ async def get_performance_analytics(
 
 @router.get("/management/users")
 async def get_all_users(
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -194,7 +289,7 @@ async def get_all_users(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info("👥 Fetching all users for management")
+        logger.info(f"👥 Fetching all users for management by admin {current_user.username}")
         users = await AdminService.get_all_users(db)
         
         return {"users": users}
@@ -209,6 +304,7 @@ async def get_all_users(
 @router.post("/management/users")
 async def create_new_user(
     user_data: CreateUserRequest,
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -217,7 +313,7 @@ async def create_new_user(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info(f"👤 Creating new user: {user_data.email}")
+        logger.info(f"👤 Admin {current_user.username} creating new user: {user_data.email}")
         new_user = await AdminService.create_user(
             db, 
             user_data.full_name, 
@@ -230,7 +326,8 @@ async def create_new_user(
             "event": "admin-update",
             "data": json.dumps({
                 "event": "user_created",
-                "user": new_user
+                "user": new_user,
+                "created_by": current_user.username
             })
         }
         
@@ -254,6 +351,7 @@ async def create_new_user(
 @router.put("/management/users/role")
 async def update_user_role(
     role_update: UpdateUserRoleRequest,
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -262,7 +360,7 @@ async def update_user_role(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info(f"🔄 Updating user role: {role_update.user_id} to {role_update.new_role}")
+        logger.info(f"🔄 Admin {current_user.username} updating user role: {role_update.user_id} to {role_update.new_role}")
         result = await AdminService.update_user_role(
             db, 
             role_update.user_id, 
@@ -274,7 +372,8 @@ async def update_user_role(
             "event": "admin-update",
             "data": json.dumps({
                 "event": "user_role_updated",
-                "update": result
+                "update": result,
+                "updated_by": current_user.username
             })
         }
         
@@ -298,6 +397,7 @@ async def update_user_role(
 @router.post("/management/users/{user_id}/toggle-status")
 async def toggle_user_status(
     user_id: str,
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -306,7 +406,7 @@ async def toggle_user_status(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info(f"🔄 Toggling user status: {user_id}")
+        logger.info(f"🔄 Admin {current_user.username} toggling user status: {user_id}")
         result = await AdminService.toggle_user_status(db, user_id)
         
         # Broadcast to admin SSE clients
@@ -314,7 +414,8 @@ async def toggle_user_status(
             "event": "admin-update",
             "data": json.dumps({
                 "event": "user_status_toggled",
-                "update": result
+                "update": result,
+                "updated_by": current_user.username
             })
         }
         
@@ -338,6 +439,7 @@ async def toggle_user_status(
 @router.get("/assignments")
 async def get_all_assignments(
     status_filter: Optional[str] = None,
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -346,7 +448,7 @@ async def get_all_assignments(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info(f"📋 Fetching all assignments (filter: {status_filter})")
+        logger.info(f"📋 Admin {current_user.username} fetching all assignments (filter: {status_filter})")
         assignments = await AdminService.get_all_assignments(db)
         
         # Apply status filter if provided
@@ -365,6 +467,7 @@ async def get_all_assignments(
 @router.get("/submissions/recent")
 async def get_recent_submissions(
     limit: Optional[int] = 10,
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -373,7 +476,7 @@ async def get_recent_submissions(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info(f"📝 Fetching {limit} recent submissions")
+        logger.info(f"📝 Admin {current_user.username} fetching {limit} recent submissions")
         submissions = await AdminService.get_recent_submissions(db, limit)
         
         return {"submissions": submissions}
@@ -387,6 +490,7 @@ async def get_recent_submissions(
 
 @router.get("/stats/summary")
 async def get_stats_summary(
+    current_user: User = Depends(require_admin_role),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -395,7 +499,7 @@ async def get_stats_summary(
     try:
         from components.adminDashboard.service import AdminService
         
-        logger.info("📊 Fetching stats summary")
+        logger.info(f"📊 Admin {current_user.username} fetching stats summary")
         overview = await AdminService.get_dashboard_overview(db)
         
         # Calculate additional stats
@@ -418,3 +522,27 @@ async def get_stats_summary(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get stats summary"
         )
+
+@router.get("/profile")
+async def get_admin_profile(
+    current_user: User = Depends(require_admin_role)
+):
+    """
+    Get the authenticated admin's profile information.
+    """
+    logger.info(f"👤 Fetching profile for admin {current_user.username}")
+    
+    profile = {
+        "user_id": str(current_user.user_id),
+        "full_name": current_user.full_name,
+        "username": current_user.username,
+        "email": current_user.email,
+        "role": current_user.role.value,
+        "is_active": current_user.is_active,
+        "is_verified": current_user.is_verified,
+        "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
+        "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+        "updated_at": current_user.updated_at.isoformat() if current_user.updated_at else None
+    }
+    
+    return {"profile": profile}

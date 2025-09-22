@@ -3,6 +3,7 @@ from sqlalchemy.future import select
 from sqlalchemy import func, desc, and_, or_, text, case
 from components.submissions.models import VideoSubmission, SubmissionStatus, Volunteer, VideoAssignment, AssignmentStatus
 from components.auth.models import User, UserRole
+from core.security import security
 from fastapi import HTTPException, status
 from typing import List, Dict, Any, Optional
 import logging
@@ -496,7 +497,7 @@ class AdminService:
     @staticmethod
     def generate_secure_password(length: int = 12) -> str:
         """Generate a secure random password."""
-        alphabet = string.ascii_letters + string.digits
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
         password = ''.join(secrets.choice(alphabet) for _ in range(length))
         return password
     
@@ -508,7 +509,7 @@ class AdminService:
         role: str,
         password: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Create a new user."""
+        """Create a new user with proper password hashing."""
         try:
             # Validate role
             try:
@@ -535,14 +536,19 @@ class AdminService:
             
             # Generate secure password if not provided
             if not password:
-                password = AdminService.generate_secure_password()
+                temp_password = AdminService.generate_secure_password()
+            else:
+                temp_password = password
+            
+            # Hash the password using security service
+            hashed_password = security.get_password_hash(temp_password)
             
             # Create new user
             new_user = User(
                 full_name=full_name,
                 username=username,
                 email=email,
-                password=password,  # In production, hash this!
+                password=hashed_password,  # ✅ Store hashed password
                 role=role_enum,
                 is_active=True,
                 is_verified=True  # Auto-verify admin created users
@@ -564,7 +570,7 @@ class AdminService:
                 "is_active": new_user.is_active,
                 "is_verified": new_user.is_verified,
                 "created_at": new_user.created_at.isoformat(),
-                "temporary_password": password  # Return for admin to share (remove in production)
+                "temporary_password": temp_password  # Return unhashed for admin to share
             }
             
         except ValueError as e:
