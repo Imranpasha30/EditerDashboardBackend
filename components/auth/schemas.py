@@ -12,6 +12,7 @@ class UserRole(str, Enum):
     EDITOR = "EDITOR"
     MANAGER = "MANAGER"
     ADMIN = "ADMIN"
+    NOT_SELECTED = "NOT_SELECTED"
 
 # === Base Registration Schema ===
 class UserCreateBase(BaseModel):
