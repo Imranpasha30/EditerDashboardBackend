@@ -29,6 +29,7 @@ class EditorService:
                     VideoAssignment.completed_video_url,
                     VideoAssignment.editor_notes,
                     VideoAssignment.manager_notes,
+                    VideoAssignment.assigned_manager_id,  # Add this line
                     VideoSubmission.id.label('submission_id'),
                     VideoSubmission.video_platform_url.label('video_url'),
                     VideoSubmission.status.label('submission_status'),
@@ -51,6 +52,7 @@ class EditorService:
                     "video_url": assignment.video_url,
                     "volunteer_name": assignment.volunteer_name,
                     "manager_name": assignment.manager_name,
+                    "manager_id": str(assignment.assigned_manager_id),  # Add this line
                     "assignment_status": assignment.assignment_status.value if hasattr(assignment.assignment_status, 'value') else assignment.assignment_status,
                     "submission_status": assignment.submission_status.value if hasattr(assignment.submission_status, 'value') else assignment.submission_status,
                     "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None,
@@ -62,6 +64,7 @@ class EditorService:
                 }
                 for assignment in assignments
             ]
+
             
         except Exception as e:
             logger.error(f"Error fetching editor assignments: {e}")
@@ -208,3 +211,39 @@ class EditorService:
         except Exception as e:
             logger.error(f"Error fetching editor stats: {e}")
             return {"total_assignments": 0, "in_progress": 0, "completed": 0, "revision_needed": 0}
+
+    @staticmethod
+    async def get_editor_profile(db: AsyncSession, editor_id: str) -> Dict[str, Any]:
+        """Get editor profile information."""
+        try:
+            editor_uuid = UUID(editor_id)
+            logger.info(f"Fetching profile for editor: {editor_id}")
+            
+            result = await db.execute(
+                select(User.user_id, User.full_name, User.email, User.username, User.role, User.is_active, User.created_at)
+                .where(User.user_id == editor_uuid)
+            )
+            
+            editor = result.mappings().first()
+            if not editor:
+                raise ValueError(f"Editor not found: {editor_id}")
+            
+            return {
+                "editor_id": str(editor.user_id),
+                "full_name": editor.full_name,
+                "email": editor.email,
+                "username": editor.username,
+                "role": editor.role.value if hasattr(editor.role, 'value') else editor.role,
+                "is_active": editor.is_active,
+                "joined_at": editor.created_at.isoformat() if editor.created_at else None
+            }
+            
+        except ValueError as e:
+            logger.error(f"ValueError fetching editor profile: {str(e)}")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        except Exception as e:
+            logger.error(f"Error fetching editor profile: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not fetch editor profile"
+            )
