@@ -117,64 +117,67 @@ class AuthService:
         credentials: UserLogin, 
         db: AsyncSession, 
         request: Request = None,
-        required_role: Optional[UserRole] = None
+        required_role: Optional[UserRole] = None # This is used by other internal functions
     ) -> User:
-        """Authenticate user with role-based access and account lockout protection"""
+        """
+        Authenticate a user with comprehensive checks for active status, role, and verification.
+        """
         
         user = await get_user_by_username(db, credentials.username)
         
-        # Check if user exists
-        if not user:
-            await AuthService._handle_failed_login(None, credentials.username, db, request)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials"
-            )
-        
-        # Check if account is locked
-        await AuthService._check_account_locked(user, db, request)
-        
-        # Verify password
-        if not security.verify_password(credentials.password, user.password):
+        # 1. Check for basic credentials (user exists and password is correct)
+        if not user or not security.verify_password(credentials.password, user.password):
             await AuthService._handle_failed_login(user, credentials.username, db, request)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials"
+                detail="Invalid username or password"
             )
         
-        # Check if user is active
+        # 2. Check if the account has been deactivated
         if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="This account has been deactivated."
+            )
+        
+        # --- THIS IS THE NEW, CRITICAL LOGIC ---
+
+        # 3. Block any user whose role has not been assigned yet.
+        if user.role == UserRole.NOT_SELECTED:
             await AuthService.log_security_event(
-                event_type="login_attempt_inactive_account",
+                event_type="login_attempt_pending_approval",
                 user_id=str(user.user_id),
-                request=request,
-                db=db,
+                request=request, db=db,
                 details={"username": user.username}
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account is deactivated"
+                detail="Your account is pending approval from an administrator. Please wait."
             )
-        
-        # Check role-based access
-        if required_role and user.role != required_role:
+            
+        # 4. For regular users (not Admins), check if they have been verified by an admin.
+        if not user.is_verified and not user.is_admin:
             await AuthService.log_security_event(
-                event_type="login_attempt_insufficient_role",
+                event_type="login_attempt_unverified",
                 user_id=str(user.user_id),
-                request=request,
-                db=db,
-                details={
-                    "username": user.username,
-                    "user_role": user.role.value,
-                    "required_role": required_role.value
-                }
+                request=request, db=db,
+                details={"username": user.username, "role": user.role.value}
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Insufficient permissions. {required_role.value} access required"
+                detail="Your account has not been verified by an administrator yet."
+            )
+            
+        # --- END OF NEW LOGIC ---
+
+        # This check is for internal use by functions like `authenticate_editor`
+        if required_role and user.role != required_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions. {required_role.value} access required."
             )
         
-        # Reset failed attempts and update last login
+        # If all checks pass, log the successful login and return the user object
         await AuthService._handle_successful_login(user, db, request)
         
         return user

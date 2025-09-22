@@ -167,7 +167,7 @@ class Token(BaseModel):
     token_type: str = "bearer"
     expires_in: int = Field(..., description="Token expiration time in seconds")
     role: UserRole
-    user_id: str
+    # user_id: str
 
     class Config:
         json_schema_extra = {
@@ -176,7 +176,7 @@ class Token(BaseModel):
                 "token_type": "bearer",
                 "expires_in": 43200,
                 "role": "EDITOR",
-                "user_id": "550e8400-e29b-41d4-a716-446655440000"
+                # "user_id": "550e8400-e29b-41d4-a716-446655440000"
             }
         }
 
