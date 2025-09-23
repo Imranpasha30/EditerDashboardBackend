@@ -235,10 +235,11 @@ class ManagerService:
             
             assignment_uuid = UUID(assignment_id)
             
-            # Get the assignment
+            # Get the assignment with volunteer information
             result = await db.execute(
-                select(VideoAssignment, VideoSubmission)
+                select(VideoAssignment, VideoSubmission, Volunteer)
                 .join(VideoSubmission, VideoAssignment.video_submission_id == VideoSubmission.id)
+                .join(Volunteer, VideoSubmission.volunteer_id == Volunteer.id)  # Join with Volunteer
                 .where(VideoAssignment.id == assignment_uuid)
             )
             
@@ -246,10 +247,11 @@ class ManagerService:
             if not assignment_data:
                 raise ValueError(f"Assignment not found: {assignment_id}")
             
-            assignment, submission = assignment_data
+            assignment, submission, volunteer = assignment_data
             
             logger.info(f"Found assignment: {assignment.id}")
             logger.info(f"Current assignment status: {assignment.status}")
+            logger.info(f"Volunteer: {volunteer.first_name} (chat_id: {volunteer.id})")
             
             # Update assignment status to CANCELLED
             assignment.status = AssignmentStatus.CANCELLED
@@ -261,11 +263,36 @@ class ManagerService:
             submission.decline_reason = decline_reason
             submission.updated_at = datetime.utcnow()
             
+            # Commit database changes first
             await db.commit()
             await db.refresh(assignment)
             await db.refresh(submission)
             
             logger.info(f"✅ Successfully declined assignment {assignment_id}")
+            
+            # Send Telegram notification to volunteer
+            notification_sent = False
+            try:
+                from core.telegram_service import TelegramService
+                
+                logger.info(f"📱 Attempting to send decline notification to volunteer {volunteer.first_name}")
+                
+                notification_sent = await TelegramService.send_video_declined_notification(
+                    chat_id=volunteer.id,  # volunteer.id is the chat_id
+                    decline_reason=decline_reason,
+                    video_url=submission.video_platform_url,
+                    volunteer_name=volunteer.first_name
+                )
+                
+                if notification_sent:
+                    logger.info(f"✅ Decline notification sent successfully to {volunteer.first_name}")
+                else:
+                    logger.warning(f"⚠️ Failed to send decline notification to {volunteer.first_name}")
+                    
+            except Exception as telegram_error:
+                logger.error(f"💥 Error sending Telegram notification: {str(telegram_error)}", exc_info=True)
+                # Don't raise exception here - assignment decline should still succeed even if notification fails
+            
             logger.info(f"=== DECLINING ASSIGNMENT END ===")
             
             return {
@@ -273,7 +300,8 @@ class ManagerService:
                 "submission_id": str(submission.id),
                 "assignment_status": assignment.status.value,
                 "submission_status": submission.status.value,
-                "decline_reason": decline_reason
+                "decline_reason": decline_reason,
+                "volunteer_notified": notification_sent
             }
             
         except ValueError as e:
@@ -415,7 +443,7 @@ class ManagerService:
         manager_id: Optional[str] = None,
         decline_reason: Optional[str] = None
     ):
-        """Update a video submission's status with decline reason."""
+        """Update a video submission's status with decline reason and send Telegram notification if declined."""
         try:
             logger.info(f"=== UPDATE WITH REASON START ===")
             logger.info(f"submission_id: {submission_id}")
@@ -428,11 +456,19 @@ class ManagerService:
                 logger.error(f"✗ Invalid submission ID format: {submission_id}")
                 raise ValueError(f"Invalid submission ID format: {submission_id}")
 
-            # Get the current submission
-            submission = await db.get(VideoSubmission, submission_uuid)
-            if not submission:
+            # Get the current submission WITH volunteer information
+            result = await db.execute(
+                select(VideoSubmission, Volunteer)
+                .join(Volunteer, VideoSubmission.volunteer_id == Volunteer.id)
+                .where(VideoSubmission.id == submission_uuid)
+            )
+            
+            submission_data = result.first()
+            if not submission_data:
                 logger.error(f"✗ Submission not found: {submission_id}")
                 raise ValueError("Submission not found.")
+            
+            submission, volunteer = submission_data
 
             # Validate status transition
             try:
@@ -457,6 +493,30 @@ class ManagerService:
             await db.refresh(submission)
             
             logger.info(f"✅ Successfully updated submission {submission_id} from {old_status} to {new_status} with reason: {decline_reason}")
+            
+            # Send Telegram notification for declines
+            notification_sent = False
+            if new_status == "declined" and decline_reason:
+                try:
+                    from core.telegram_service import TelegramService
+                    
+                    logger.info(f"📱 Attempting to send submission decline notification to volunteer {volunteer.first_name}")
+                    
+                    notification_sent = await TelegramService.send_video_declined_notification(
+                        chat_id=volunteer.id,
+                        decline_reason=decline_reason,
+                        video_url=submission.video_platform_url,
+                        volunteer_name=volunteer.first_name
+                    )
+                    
+                    if notification_sent:
+                        logger.info(f"✅ Submission decline notification sent successfully to {volunteer.first_name}")
+                    else:
+                        logger.warning(f"⚠️ Failed to send submission decline notification to {volunteer.first_name}")
+                        
+                except Exception as telegram_error:
+                    logger.error(f"💥 Error sending Telegram notification for submission: {str(telegram_error)}", exc_info=True)
+            
             logger.info(f"=== UPDATE WITH REASON END ===")
             
             return submission

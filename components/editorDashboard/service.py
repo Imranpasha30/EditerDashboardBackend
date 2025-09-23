@@ -74,13 +74,14 @@ class EditorService:
             )
     
     @staticmethod
+    @staticmethod
     async def complete_assignment(
         db: AsyncSession,
         assignment_id: str,
         completed_video_url: str,
         editor_notes: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Complete an assignment and update both tables."""
+        """Complete an assignment with the edited video URL and send success notification."""
         try:
             logger.info(f"=== COMPLETING ASSIGNMENT START ===")
             logger.info(f"assignment_id: {assignment_id}")
@@ -89,10 +90,11 @@ class EditorService:
             
             assignment_uuid = UUID(assignment_id)
             
-            # Get the assignment with submission details
+            # Get the assignment with volunteer and submission information
             result = await db.execute(
-                select(VideoAssignment, VideoSubmission)
+                select(VideoAssignment, VideoSubmission, Volunteer)
                 .join(VideoSubmission, VideoAssignment.video_submission_id == VideoSubmission.id)
+                .join(Volunteer, VideoSubmission.volunteer_id == Volunteer.id)
                 .where(VideoAssignment.id == assignment_uuid)
             )
             
@@ -100,31 +102,55 @@ class EditorService:
             if not assignment_data:
                 raise ValueError(f"Assignment not found: {assignment_id}")
             
-            assignment, submission = assignment_data
+            assignment, submission, volunteer = assignment_data
             
             logger.info(f"Found assignment: {assignment.id}")
             logger.info(f"Current assignment status: {assignment.status}")
-            logger.info(f"Current submission status: {submission.status}")
+            logger.info(f"Volunteer: {volunteer.first_name} (chat_id: {volunteer.id})")
+            logger.info(f"Original video: {submission.video_platform_url}")
             
-            # Update VideoAssignment
+            # Update assignment status to COMPLETED
             assignment.status = AssignmentStatus.COMPLETED
             assignment.completed_video_url = completed_video_url
+            assignment.editor_notes = editor_notes
             assignment.completed_at = datetime.utcnow()
             assignment.updated_at = datetime.utcnow()
-            if editor_notes:
-                assignment.editor_notes = editor_notes
             
-            # Update VideoSubmission status to USED
+            # Update submission status to USED
             submission.status = SubmissionStatus.USED
             submission.updated_at = datetime.utcnow()
             
+            # Commit database changes first
             await db.commit()
             await db.refresh(assignment)
             await db.refresh(submission)
             
             logger.info(f"✅ Successfully completed assignment {assignment_id}")
-            logger.info(f"Assignment status: {assignment.status}")
-            logger.info(f"Submission status: {submission.status}")
+            
+            # Send success notification to volunteer
+            notification_sent = False
+            try:
+                from core.telegram_service import TelegramService
+                
+                logger.info(f"🎉 Attempting to send completion notification to volunteer {volunteer.first_name}")
+                
+                notification_sent = await TelegramService.send_video_completion_notification(
+                    chat_id=volunteer.id,  # volunteer.id is the chat_id
+                    original_video_url=submission.video_platform_url,  # Their original video
+                    completed_video_url=completed_video_url,  # Where it was published
+                    volunteer_name=volunteer.first_name,
+                    editor_notes=editor_notes
+                )
+                
+                if notification_sent:
+                    logger.info(f"✅ Completion notification sent successfully to {volunteer.first_name}")
+                else:
+                    logger.warning(f"⚠️ Failed to send completion notification to {volunteer.first_name}")
+                    
+            except Exception as telegram_error:
+                logger.error(f"💥 Error sending Telegram completion notification: {str(telegram_error)}", exc_info=True)
+                # Don't raise exception here - assignment completion should still succeed even if notification fails
+            
             logger.info(f"=== COMPLETING ASSIGNMENT END ===")
             
             return {
@@ -132,10 +158,10 @@ class EditorService:
                 "submission_id": str(submission.id),
                 "assignment_status": assignment.status.value,
                 "submission_status": submission.status.value,
-                "completed_video_url": assignment.completed_video_url,
-                "completed_at": assignment.completed_at.isoformat(),
-                "editor_notes": assignment.editor_notes
-                
+                "completed_video_url": completed_video_url,
+                "editor_notes": editor_notes,
+                "completed_at": assignment.completed_at.isoformat() if assignment.completed_at else None,
+                "volunteer_notified": notification_sent
             }
             
         except ValueError as e:
@@ -149,6 +175,7 @@ class EditorService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to complete assignment: {str(e)}"
             )
+
     
     @staticmethod
     async def update_editor_notes(
