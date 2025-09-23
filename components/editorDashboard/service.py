@@ -135,6 +135,7 @@ class EditorService:
                 "completed_video_url": assignment.completed_video_url,
                 "completed_at": assignment.completed_at.isoformat(),
                 "editor_notes": assignment.editor_notes
+                
             }
             
         except ValueError as e:
@@ -246,4 +247,71 @@ class EditorService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Could not fetch editor profile"
+            )
+
+    @staticmethod
+    async def request_revision(
+        db: AsyncSession,
+        assignment_id: str,
+        revision_notes: str
+    ) -> Dict[str, Any]:
+        """Request revision for an assignment."""
+        try:
+            logger.info(f"=== REQUESTING REVISION START ===")
+            logger.info(f"assignment_id: {assignment_id}")
+            logger.info(f"revision_notes: {revision_notes}")
+            
+            assignment_uuid = UUID(assignment_id)
+            
+            # Get the assignment
+            result = await db.execute(
+                select(VideoAssignment, VideoSubmission)
+                .join(VideoSubmission, VideoAssignment.video_submission_id == VideoSubmission.id)
+                .where(VideoAssignment.id == assignment_uuid)
+            )
+            
+            assignment_data = result.first()
+            if not assignment_data:
+                raise ValueError(f"Assignment not found: {assignment_id}")
+            
+            assignment, submission = assignment_data
+            
+            logger.info(f"Found assignment: {assignment.id}")
+            logger.info(f"Current assignment status: {assignment.status}")
+            
+            # Update VideoAssignment to REVISION_NEEDED
+            assignment.status = AssignmentStatus.REVISION_NEEDED
+            assignment.revision_notes = revision_notes
+            assignment.updated_at = datetime.utcnow()
+            
+            # Keep submission status as ASSIGNED (editor still has it)
+            submission.updated_at = datetime.utcnow()
+            
+            await db.commit()
+            await db.refresh(assignment)
+            await db.refresh(submission)
+            
+            logger.info(f"✅ Successfully requested revision for assignment {assignment_id}")
+            logger.info(f"Assignment status: {assignment.status}")
+            logger.info(f"=== REQUESTING REVISION END ===")
+            
+            return {
+                "assignment_id": str(assignment.id),
+                "submission_id": str(submission.id),
+                "assignment_status": assignment.status.value,
+                "submission_status": submission.status.value,
+                "revision_notes": assignment.revision_notes,
+                "updated_at": assignment.updated_at.isoformat()
+            }
+            
+        except ValueError as e:
+            await db.rollback()
+            logger.error(f"❌ ValueError requesting revision: {str(e)}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"💥 Unexpected error requesting revision: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to request revision: {str(e)}"
             )

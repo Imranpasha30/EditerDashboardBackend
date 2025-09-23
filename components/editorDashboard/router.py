@@ -416,3 +416,53 @@ async def broadcast_to_editor_clients(message: dict):
             logger.error(f"Error broadcasting to editor SSE client: {e}")
             if client_queue in editor_sse_clients:
                 editor_sse_clients.remove(client_queue)
+
+
+@router.post("/request-revision")
+async def request_revision(
+    assignment_id: str,
+    revision_notes: str,
+    current_user: User = Depends(require_editor_role),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Request revision for an assignment.
+    Uses authenticated user's ID.
+    """
+    editor_id = str(current_user.user_id)
+    
+    try:
+        from components.editorDashboard.service import EditorService
+        
+        logger.info(f"🔄 Requesting revision for assignment {assignment_id} by editor {current_user.username}")
+        
+        # Verify assignment belongs to this editor
+        assignments = await EditorService.get_editor_assignments(db, editor_id)
+        assignment_exists = any(a["assignment_id"] == assignment_id for a in assignments)
+        
+        if not assignment_exists:
+            logger.warning(f"❌ Assignment {assignment_id} not found for editor {current_user.username}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assignment not found or not assigned to this editor"
+            )
+        
+        result = await EditorService.request_revision(db, assignment_id, revision_notes)
+        
+        logger.info(f"✅ Revision requested for assignment {assignment_id} by {current_user.username}")
+        return {"message": "Revision requested successfully", "data": result, "success": True}
+        
+    except ValueError as e:
+        logger.error(f"❌ ValueError requesting revision for {assignment_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"💥 Failed to request revision for assignment {assignment_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to request revision"
+        )
