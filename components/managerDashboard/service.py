@@ -32,6 +32,9 @@ class ManagerService:
                     VideoAssignment.assigned_editor_id,
                     VideoAssignment.id.label('assignment_id'),
                     VideoAssignment.status.label('assignment_status'),
+                    VideoAssignment.revision_notes,  # Add revision notes
+                    VideoAssignment.manager_notes,   # Add manager notes
+                    VideoAssignment.assigned_at,     # Add assigned date
                     User.full_name.label('assigned_editor_name')
                 )
                 .join(Volunteer, VideoSubmission.volunteer_id == Volunteer.id)
@@ -53,6 +56,9 @@ class ManagerService:
                     "assigned_editor_name": sub.assigned_editor_name,
                     "assignment_id": str(sub.assignment_id) if sub.assignment_id else None,
                     "assignment_status": sub.assignment_status.value if sub.assignment_status and hasattr(sub.assignment_status, 'value') else sub.assignment_status,
+                    "revision_notes": sub.revision_notes,
+                    "manager_notes": sub.manager_notes,
+                    "assigned_at": sub.assigned_at.isoformat() if sub.assigned_at else None,
                     "decline_reason": sub.decline_reason
                 }
                 for sub in submissions
@@ -62,6 +68,224 @@ class ManagerService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Could not fetch submissions"
+            )
+
+    @staticmethod
+    async def get_all_assignments(db: AsyncSession) -> List[Dict[str, Any]]:
+        """Fetch all video assignments with full details for manager dashboard."""
+        try:
+            logger.info("📋 Fetching all assignments with details...")
+            
+            result = await db.execute(
+                select(
+                    VideoAssignment.id.label('assignment_id'),
+                    VideoAssignment.status.label('assignment_status'),
+                    VideoAssignment.assigned_at,
+                    VideoAssignment.completed_at,
+                    VideoAssignment.revision_notes,
+                    VideoAssignment.manager_notes,
+                    VideoAssignment.editor_notes,
+                    VideoAssignment.completed_video_url,
+                    VideoSubmission.id.label('submission_id'),
+                    VideoSubmission.video_platform_url.label('video_url'),
+                    VideoSubmission.status.label('submission_status'),
+                    VideoSubmission.created_at.label('received_at'),
+                    Volunteer.first_name.label('volunteer_name'),
+                    User.full_name.label('assigned_editor_name'),
+                    VideoAssignment.assigned_editor_id,
+                    VideoAssignment.assigned_manager_id
+                )
+                .join(VideoSubmission, VideoAssignment.video_submission_id == VideoSubmission.id)
+                .join(Volunteer, VideoSubmission.volunteer_id == Volunteer.id)
+                .join(User, VideoAssignment.assigned_editor_id == User.user_id)
+                .order_by(VideoAssignment.assigned_at.desc())
+            )
+            
+            assignments = result.mappings().all()
+            assignment_list = [
+                {
+                    "assignment_id": str(assignment.assignment_id),
+                    "submission_id": str(assignment.submission_id),
+                    "video_url": assignment.video_url,
+                    "volunteer_name": assignment.volunteer_name,
+                    "assigned_editor_name": assignment.assigned_editor_name,
+                    "assigned_editor_id": str(assignment.assigned_editor_id),
+                    "assigned_manager_id": str(assignment.assigned_manager_id),
+                    "assignment_status": assignment.assignment_status.value if hasattr(assignment.assignment_status, 'value') else assignment.assignment_status,
+                    "submission_status": assignment.submission_status.value if hasattr(assignment.submission_status, 'value') else assignment.submission_status,
+                    "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None,
+                    "completed_at": assignment.completed_at.isoformat() if assignment.completed_at else None,
+                    "completed_video_url": assignment.completed_video_url,
+                    "revision_notes": assignment.revision_notes,
+                    "manager_notes": assignment.manager_notes,
+                    "editor_notes": assignment.editor_notes,
+                    "received_at": assignment.received_at.isoformat() if assignment.received_at else None
+                }
+                for assignment in assignments
+            ]
+            
+            logger.info(f"✅ Fetched {len(assignment_list)} assignments")
+            return assignment_list
+            
+        except Exception as e:
+            logger.error(f"Error fetching assignments: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not fetch assignments"
+            )
+
+    @staticmethod
+    async def reassign_assignment(
+        db: AsyncSession,
+        assignment_id: str,
+        new_editor_id: str,
+        manager_notes: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Reassign an assignment to a new editor with manager notes."""
+        try:
+            logger.info(f"=== REASSIGNING ASSIGNMENT START ===")
+            logger.info(f"assignment_id: {assignment_id}")
+            logger.info(f"new_editor_id: {new_editor_id}")
+            logger.info(f"manager_notes: {manager_notes}")
+            
+            assignment_uuid = UUID(assignment_id)
+            new_editor_uuid = UUID(new_editor_id)
+            
+            # Get the assignment
+            result = await db.execute(
+                select(VideoAssignment, VideoSubmission)
+                .join(VideoSubmission, VideoAssignment.video_submission_id == VideoSubmission.id)
+                .where(VideoAssignment.id == assignment_uuid)
+            )
+            
+            assignment_data = result.first()
+            if not assignment_data:
+                raise ValueError(f"Assignment not found: {assignment_id}")
+            
+            assignment, submission = assignment_data
+            
+            logger.info(f"Found assignment: {assignment.id}")
+            logger.info(f"Current assignment status: {assignment.status}")
+            logger.info(f"Current editor: {assignment.assigned_editor_id}")
+            
+            # Verify new editor exists and is active
+            new_editor = await db.get(User, new_editor_uuid)
+            if not new_editor:
+                raise ValueError(f"New editor not found: {new_editor_id}")
+            
+            if not new_editor.is_active:
+                raise ValueError(f"New editor is inactive: {new_editor.full_name}")
+            
+            if new_editor.role != UserRole.EDITOR:
+                raise ValueError(f"User is not an editor: {new_editor.full_name}")
+            
+            logger.info(f"New editor verified: {new_editor.full_name}")
+            
+            # Update assignment
+            assignment.assigned_editor_id = new_editor_uuid
+            assignment.status = AssignmentStatus.IN_PROGRESS  # Reset to in progress
+            assignment.manager_notes = manager_notes
+            assignment.assigned_at = datetime.utcnow()  # Update assignment time
+            assignment.updated_at = datetime.utcnow()
+            
+            # Keep submission as ASSIGNED
+            submission.updated_at = datetime.utcnow()
+            
+            await db.commit()
+            await db.refresh(assignment)
+            await db.refresh(submission)
+            
+            logger.info(f"✅ Successfully reassigned assignment {assignment_id} to {new_editor.full_name}")
+            logger.info(f"=== REASSIGNING ASSIGNMENT END ===")
+            
+            return {
+                "assignment_id": str(assignment.id),
+                "submission_id": str(submission.id),
+                "assignment_status": assignment.status.value,
+                "submission_status": submission.status.value,
+                "assigned_editor_id": str(assignment.assigned_editor_id),
+                "assigned_editor_name": new_editor.full_name,
+                "manager_notes": assignment.manager_notes,
+                "assigned_at": assignment.assigned_at.isoformat()
+            }
+            
+        except ValueError as e:
+            await db.rollback()
+            logger.error(f"❌ ValueError reassigning assignment: {str(e)}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"💥 Unexpected error reassigning assignment: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to reassign assignment: {str(e)}"
+            )
+
+    @staticmethod
+    async def decline_assignment(
+        db: AsyncSession,
+        assignment_id: str,
+        decline_reason: str
+    ) -> Dict[str, Any]:
+        """Decline an assignment and update submission status."""
+        try:
+            logger.info(f"=== DECLINING ASSIGNMENT START ===")
+            logger.info(f"assignment_id: {assignment_id}")
+            logger.info(f"decline_reason: {decline_reason}")
+            
+            assignment_uuid = UUID(assignment_id)
+            
+            # Get the assignment
+            result = await db.execute(
+                select(VideoAssignment, VideoSubmission)
+                .join(VideoSubmission, VideoAssignment.video_submission_id == VideoSubmission.id)
+                .where(VideoAssignment.id == assignment_uuid)
+            )
+            
+            assignment_data = result.first()
+            if not assignment_data:
+                raise ValueError(f"Assignment not found: {assignment_id}")
+            
+            assignment, submission = assignment_data
+            
+            logger.info(f"Found assignment: {assignment.id}")
+            logger.info(f"Current assignment status: {assignment.status}")
+            
+            # Update assignment status to CANCELLED
+            assignment.status = AssignmentStatus.CANCELLED
+            assignment.manager_notes = decline_reason
+            assignment.updated_at = datetime.utcnow()
+            
+            # Update submission status to DECLINED
+            submission.status = SubmissionStatus.DECLINED
+            submission.decline_reason = decline_reason
+            submission.updated_at = datetime.utcnow()
+            
+            await db.commit()
+            await db.refresh(assignment)
+            await db.refresh(submission)
+            
+            logger.info(f"✅ Successfully declined assignment {assignment_id}")
+            logger.info(f"=== DECLINING ASSIGNMENT END ===")
+            
+            return {
+                "assignment_id": str(assignment.id),
+                "submission_id": str(submission.id),
+                "assignment_status": assignment.status.value,
+                "submission_status": submission.status.value,
+                "decline_reason": decline_reason
+            }
+            
+        except ValueError as e:
+            await db.rollback()
+            logger.error(f"❌ ValueError declining assignment: {str(e)}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"💥 Unexpected error declining assignment: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to decline assignment: {str(e)}"
             )
 
     @staticmethod

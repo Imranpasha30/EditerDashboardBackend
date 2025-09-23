@@ -100,8 +100,9 @@ async def get_initial_dashboard_data(
     from components.managerDashboard.service import ManagerService
     
     try:
-        # Get all submissions and editors
+        # Get all submissions, assignments, and editors
         submissions = await ManagerService.get_all_submissions(db)
+        assignments = await ManagerService.get_all_assignments(db)  # Add assignments
         editors = await ManagerService.get_all_editors(db)
         
         # Get manager profile info - use current_user data directly
@@ -116,10 +117,11 @@ async def get_initial_dashboard_data(
             "created_at": current_user.created_at.isoformat() if current_user.created_at else None
         }
         
-        logger.info(f"✅ Fetched {len(submissions)} submissions and {len(editors)} editors for manager {current_user.username}")
+        logger.info(f"✅ Fetched {len(submissions)} submissions, {len(assignments)} assignments and {len(editors)} editors for manager {current_user.username}")
         
         return {
             "submissions": submissions,
+            "assignments": assignments,  # Add assignments to response
             "editors": editors,
             "manager_profile": manager_profile
         }
@@ -228,6 +230,81 @@ async def update_submission_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update submission status"
+        )
+
+@router.post("/reassign-assignment")
+async def reassign_assignment(
+    assignment_id: str,
+    new_editor_id: str,
+    manager_notes: Optional[str] = None,
+    current_user: User = Depends(require_manager_role),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Reassign an assignment to a new editor with manager notes.
+    """
+    try:
+        from components.managerDashboard.service import ManagerService
+        
+        logger.info(f"🔄 Manager {current_user.username} reassigning assignment {assignment_id} to editor {new_editor_id}")
+        
+        result = await ManagerService.reassign_assignment(
+            db, assignment_id, new_editor_id, manager_notes
+        )
+        
+        logger.info(f"✅ Assignment {assignment_id} reassigned successfully by {current_user.username}")
+        return {"message": "Assignment reassigned successfully", "data": result, "success": True}
+        
+    except ValueError as e:
+        logger.error(f"❌ ValueError reassigning assignment {assignment_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"💥 Failed to reassign assignment {assignment_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reassign assignment"
+        )
+
+@router.post("/decline-assignment")
+async def decline_assignment(
+    assignment_id: str,
+    decline_reason: str,
+    current_user: User = Depends(require_manager_role),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Decline an assignment and update submission status.
+    """
+    try:
+        from components.managerDashboard.service import ManagerService
+        
+        logger.info(f"❌ Manager {current_user.username} declining assignment {assignment_id}")
+        
+        result = await ManagerService.decline_assignment(
+            db, assignment_id, decline_reason
+        )
+        
+        logger.info(f"✅ Assignment {assignment_id} declined successfully by {current_user.username}")
+        return {"message": "Assignment declined successfully", "data": result, "success": True}
+        
+    except ValueError as e:
+        logger.error(f"❌ ValueError declining assignment {assignment_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"💥 Failed to decline assignment {assignment_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to decline assignment"
         )
 
 @router.get("/editor-workload")
