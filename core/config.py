@@ -61,7 +61,11 @@ class Settings(BaseSettings):
     
     #CORS & Network Security
     ALLOWED_HOSTS: List[str] = ["*"]
-    ALLOWED_ORIGINS: List[str] = ["*"]
+    ALLOWED_ORIGINS: List[str] = [
+    "https://editorsdashboard-production.up.railway.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+] if os.getenv("ENVIRONMENT", "development") == "production" else ["*"]
     ALLOWED_ORIGIN_REGEX:str=os.getenv("ALLOWED_ORIGIN_REGEX","")   
     
     
