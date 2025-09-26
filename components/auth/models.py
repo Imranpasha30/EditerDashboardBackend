@@ -4,12 +4,14 @@ from core.base import Base
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
+from sqlalchemy.orm import relationship
 
 class UserRole(PyEnum):
     USER = "USER"
     EDITOR = "EDITOR" 
     MANAGER = "MANAGER"
     ADMIN = "ADMIN"
+    NOT_SELECTED="NOT_SELECTED"
 
 class User(Base):
     __tablename__ = "users"
@@ -25,7 +27,16 @@ class User(Base):
     
     # Security
     password = Column(String(255), nullable=False)
-    role = Column(Enum(UserRole), default=UserRole.USER, nullable=False)
+    role = Column(
+        Enum(
+            UserRole,
+            name="userrole",             # match DB type name
+            native_enum=True,            # use PG enum
+            validate_strings=True        # catch invalid labels early
+        ),
+        default=UserRole.NOT_SELECTED,
+        nullable=False
+    )
     
     # Account status
     is_active = Column(Boolean, default=True)
@@ -37,6 +48,16 @@ class User(Base):
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    managed_assignments = relationship(
+        "VideoAssignment", 
+        foreign_keys="VideoAssignment.assigned_manager_id",
+        back_populates="assigned_manager"
+    )
+    editor_assignments = relationship(
+        "VideoAssignment", 
+        foreign_keys="VideoAssignment.assigned_editor_id",
+        back_populates="assigned_editor"
+    )
 
     def __repr__(self):
         return f"<User(username='{self.username}', email='{self.email}', role='{self.role.value}')>"

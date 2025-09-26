@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.security import OAuth2PasswordRequestForm
 from core.database import get_db
@@ -19,6 +19,22 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 import logging
 from datetime import datetime
+from uuid import UUID
+from sqlalchemy import or_
+from pydantic import BaseModel, Field
+from sqlalchemy import select, or_
+from sqlalchemy.orm import relationship
+from typing import Optional
+
+
+class UserStatusUpdate(BaseModel):
+    is_active: bool
+    is_verified: bool
+
+class UserUpdate(BaseModel):
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+    is_verified: Optional[bool] = None
 
 logger = logging.getLogger(__name__)
 
@@ -99,19 +115,29 @@ async def register_manager(
 
 # === Role-Based Login Endpoints ===
 
-@router.post("/login/editor", response_model=Token)
+@router.post("/login", response_model=Token)
 @limiter.limit("5/minute")
-async def login_editor(
+async def login_for_access_token(
     request: Request,
-    credentials: EditorLogin, 
+    credentials: UserLogin, 
     db: AsyncSession = Depends(get_db)
 ):
-    """Authenticate editor and return JWT token"""
-    user = await AuthService.authenticate_editor(credentials, db, request)
-    
-    # Get device info
+    """
+    Authenticate any user and return a JWT token, but deny access
+    if their role is 'NOT_SELECTED'.
+    """
+    # 1. Authenticate the user by checking their username and password
+    user = await AuthService.authenticate_user(credentials, db, request)
+
+    if user.role == UserRole.NOT_SELECTED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has not been approved by an administrator yet. Please wait."
+        )
+
+    # 3. If the check passes, proceed to create and return the token as before
     device_info = request.headers.get('user-agent', 'Unknown')
-    ip_address = request.headers.get('x-forwarded-for', request.client.host if request.client else None)
+    ip_address = request.headers.get('x-forwarded-for', request.client.host if request.client else 'Unknown')
     
     token_data = await AuthService.create_token(
         user, db, credentials.remember_me, device_info, ip_address
@@ -411,4 +437,106 @@ async def test_role_access(
         "is_manager": current_user.is_manager,
         "is_admin": current_user.is_admin,
         "message": f"Hello {current_user.full_name}! You have {current_user.role.value} access."
+    }
+
+@router.get("/manager/team", response_model=list[UserResponse])
+async def get_manager_team_list(
+    current_user: User = Depends(require_manager_role),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get a list of all users who are either pending approval (NOT_SELECTED)
+    or are already part of the team (EDITOR).
+    """
+    # This query will now work because 'select' and 'or_' are imported
+    stmt = select(User).where(
+        or_(User.role == UserRole.NOT_SELECTED, User.role == UserRole.EDITOR)
+    ).order_by(User.created_at.desc())
+    
+    result = await db.execute(stmt)
+    users = result.scalars().all()
+    return users
+
+
+@router.put("/manager/users/{user_id}", response_model=MessageResponse)
+async def update_user_details(
+    user_id: UUID,
+    update_data: UserUpdate,
+    current_user: User = Depends(require_manager_role),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update a user's role, active, or verified status.
+    """
+    user_to_update = await db.get(User, user_id)
+
+    if not user_to_update:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Update fields only if they were provided in the request
+    if update_data.role is not None:
+        user_to_update.role = update_data.role
+    if update_data.is_active is not None:
+        user_to_update.is_active = update_data.is_active
+    if update_data.is_verified is not None:
+        user_to_update.is_verified = update_data.is_verified
+    
+    await db.commit()
+    return MessageResponse(message=f"User {user_to_update.username} has been successfully updated.")
+
+# Add this to your router.py file
+
+@router.post("/validate-access", response_model=dict)
+async def validate_route_access(
+    request: Request,
+    path_data: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Validate if current user has access to requested path
+    This provides server-side route protection
+    """
+    requested_path = path_data.get("requested_path", "")
+    
+    # Define role-based path access rules
+    path_permissions = {
+        "/admin": ["ADMIN"],
+        "/managerdashboard": ["MANAGER", "ADMIN"],
+        "/editordashboard": ["EDITOR", "MANAGER", "ADMIN"],
+        "/user": ["USER", "EDITOR", "MANAGER", "ADMIN"]
+    }
+    
+    # Check if user has permission for requested path
+    has_permission = False
+    for path_prefix, allowed_roles in path_permissions.items():
+        if requested_path.startswith(path_prefix):
+            has_permission = current_user.role.value in allowed_roles
+            break
+    else:
+        # Default: allow access to paths not specifically restricted
+        has_permission = True
+    
+    # Log access attempt
+    await AuthService.log_security_event(
+        event_type="route_access_check",
+        user_id=str(current_user.user_id),
+        request=request,
+        db=db,
+        details={
+            "requested_path": requested_path,
+            "user_role": current_user.role.value,
+            "permission_granted": has_permission
+        },
+        severity="info"
+    )
+    
+    return {
+        "valid": True,
+        "has_permission": has_permission,
+        "user": {
+            "id": str(current_user.user_id),
+            "username": current_user.username,
+            "role": current_user.role.value
+        }
     }

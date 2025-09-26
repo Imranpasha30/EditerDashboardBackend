@@ -40,7 +40,7 @@ class AuthService:
             email=editor_data.email,
             phone_number=editor_data.phone_number,
             password=security.get_password_hash(editor_data.password),
-            role=UserRole.EDITOR,  # Set role to EDITOR
+            role=UserRole.NOT_SELECTED,  
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
         )
@@ -119,62 +119,61 @@ class AuthService:
         request: Request = None,
         required_role: Optional[UserRole] = None
     ) -> User:
-        """Authenticate user with role-based access and account lockout protection"""
+        """
+        Authenticate a user with comprehensive checks for active status, role, and verification.
+        """
         
         user = await get_user_by_username(db, credentials.username)
         
-        # Check if user exists
-        if not user:
-            await AuthService._handle_failed_login(None, credentials.username, db, request)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials"
-            )
-        
-        # Check if account is locked
-        await AuthService._check_account_locked(user, db, request)
-        
-        # Verify password
-        if not security.verify_password(credentials.password, user.password):
+        # 1. Check for basic credentials (user exists and password is correct)
+        if not user or not security.verify_password(credentials.password, user.password):
             await AuthService._handle_failed_login(user, credentials.username, db, request)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials"
+                detail="Invalid username or password"
             )
         
-        # Check if user is active
+        # 2. Check if the account has been deactivated
         if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="This account has been deactivated."
+            )
+        
+        # 3. Block any user whose role has not been assigned yet.
+        if user.role == UserRole.NOT_SELECTED:
             await AuthService.log_security_event(
-                event_type="login_attempt_inactive_account",
+                event_type="login_attempt_pending_approval",
                 user_id=str(user.user_id),
-                request=request,
-                db=db,
+                request=request, db=db,
                 details={"username": user.username}
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account is deactivated"
+                detail="Your account is pending approval from an administrator. Please wait."
             )
-        
-        # Check role-based access
-        if required_role and user.role != required_role:
+            
+        # 4. For regular users (not Admins), check if they have been verified by an admin.
+        if not user.is_verified and not user.is_admin:
             await AuthService.log_security_event(
-                event_type="login_attempt_insufficient_role",
+                event_type="login_attempt_unverified",
                 user_id=str(user.user_id),
-                request=request,
-                db=db,
-                details={
-                    "username": user.username,
-                    "user_role": user.role.value,
-                    "required_role": required_role.value
-                }
+                request=request, db=db,
+                details={"username": user.username, "role": user.role.value}
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Insufficient permissions. {required_role.value} access required"
+                detail="Your account has not been verified by an administrator yet."
+            )
+            
+        # This check is for internal use by functions like `authenticate_editor`
+        if required_role and user.role != required_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions. {required_role.value} access required."
             )
         
-        # Reset failed attempts and update last login
+        # If all checks pass, log the successful login and return the user object
         await AuthService._handle_successful_login(user, db, request)
         
         return user
@@ -231,7 +230,7 @@ class AuthService:
         device_info: str = None, 
         ip_address: str = None
     ) -> Dict[str, Any]:
-        """Create access token with role-based claims"""
+        """Create access token with role-based claims and secure redirect URL"""
         
         # Determine token expiration
         if remember_me:
@@ -239,16 +238,19 @@ class AuthService:
         else:
             expire_hours = settings.ACCESS_TOKEN_EXPIRE_HOURS
         
-        # Create token with user and role information
+        # Create token with minimal user information (no role in payload for security)
         access_token = security.create_access_token(
             data={
                 "user_id": str(user.user_id),
                 "username": user.username,
-                "role": user.role.value,
-                "full_name": user.full_name
+                "full_name": user.full_name,
+                "is_verified": user.is_verified
             },
             expires_delta=timedelta(hours=expire_hours)
         )
+        
+        # Determine redirect URL based on user role (SERVER-SIDE DECISION)
+        redirect_url = AuthService._get_dashboard_url(user)
         
         logger.info(f"Token created for {user.role.value}: {user.username}")
         
@@ -256,9 +258,26 @@ class AuthService:
             "access_token": access_token,
             "token_type": "bearer",
             "expires_in": expire_hours * 3600,  # Convert to seconds
-            "role": user.role,
+            "redirect_url": redirect_url,  # SERVER DETERMINES WHERE TO GO
             "user_id": str(user.user_id)
         }
+
+    @staticmethod
+    def _get_dashboard_url(user: User) -> str:
+        """Determine appropriate dashboard URL based on user role - SECURE SERVER-SIDE LOGIC"""
+        
+        # Server-side role-based routing - cannot be manipulated by client
+        if user.role == UserRole.ADMIN:
+            return "/admin/dashboard"
+        elif user.role == UserRole.MANAGER:
+            return "/managerdashboard"
+        elif user.role == UserRole.EDITOR:
+            return "/editordashboard"
+        elif user.role == UserRole.USER:
+            return "/user/dashboard"
+        else:
+            # This should never happen due to our authentication checks
+            return "/unauthorized"
 
     @staticmethod
     async def logout_user(user: User, token: str, db: AsyncSession, request: Request = None) -> None:

@@ -19,6 +19,7 @@ from core.base import Base
 # For example: from app.models.user import User
 
 from components.auth.models import User, BlacklistedToken ,SecurityEvent # Example import
+from components.submissions.models import VideoSubmission,Volunteer,OTPVerification
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config

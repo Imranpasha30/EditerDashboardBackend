@@ -12,6 +12,7 @@ class UserRole(str, Enum):
     EDITOR = "EDITOR"
     MANAGER = "MANAGER"
     ADMIN = "ADMIN"
+    NOT_SELECTED = "NOT_SELECTED"
 
 # === Base Registration Schema ===
 class UserCreateBase(BaseModel):
@@ -160,12 +161,13 @@ class UserResponse(BaseModel):
             }
         }
 
+# === UPDATED TOKEN SCHEMA WITH REDIRECT URL ===
 class Token(BaseModel):
-    """JWT token response"""
+    """JWT token response with secure redirect URL"""
     access_token: str
     token_type: str = "bearer"
     expires_in: int = Field(..., description="Token expiration time in seconds")
-    role: UserRole
+    redirect_url: str = Field(..., description="Server-determined dashboard URL")
     user_id: str
 
     class Config:
@@ -174,7 +176,7 @@ class Token(BaseModel):
                 "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
                 "token_type": "bearer",
                 "expires_in": 43200,
-                "role": "EDITOR",
+                "redirect_url": "/managerdashboard/EditorsList",
                 "user_id": "550e8400-e29b-41d4-a716-446655440000"
             }
         }
