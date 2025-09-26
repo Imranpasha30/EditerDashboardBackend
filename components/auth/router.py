@@ -45,7 +45,7 @@ router = APIRouter(tags=["Authentication"])
 # === Username/Email Availability Checks ===
 
 @router.get("/check-username/{username}", response_model=AvailabilityResponse)
-@limiter.limit("10/minute")
+# @limiter.limit("10/minute")
 async def check_username_availability(
     request: Request,
     username: str, 
@@ -66,7 +66,7 @@ async def check_username_availability(
     )
 
 @router.get("/check-email/{email}", response_model=AvailabilityResponse)
-@limiter.limit("10/minute")
+# @limiter.limit("10/minute")
 async def check_email_availability(
     request: Request,
     email: str, 
@@ -92,7 +92,7 @@ async def check_email_availability(
 # === Role-Based Registration Endpoints ===
 
 @router.post("/register/editor", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/hour")
+# @limiter.limit("3/hour")
 async def register_editor(
     request: Request,
     editor_data: EditorCreate, 
@@ -103,7 +103,7 @@ async def register_editor(
     return new_editor
 
 @router.post("/register/manager", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/hour")
+# @limiter.limit("3/hour")
 async def register_manager(
     request: Request,
     manager_data: ManagerCreate, 
@@ -116,7 +116,7 @@ async def register_manager(
 # === Role-Based Login Endpoints ===
 
 @router.post("/login", response_model=Token)
-@limiter.limit("5/minute")
+# @limiter.limit("5/minute")
 async def login_for_access_token(
     request: Request,
     credentials: UserLogin, 
@@ -146,7 +146,7 @@ async def login_for_access_token(
     return Token(**token_data)
 
 @router.post("/login/manager", response_model=Token)
-@limiter.limit("5/minute")
+# @limiter.limit("5/minute")
 async def login_manager(
     request: Request,
     credentials: ManagerLogin, 
@@ -166,7 +166,7 @@ async def login_manager(
     return Token(**token_data)
 
 @router.post("/login/admin", response_model=Token)
-@limiter.limit("3/minute")  # Stricter rate limiting for admin
+# @limiter.limit("3/minute")  # Stricter rate limiting for admin
 async def login_admin(
     request: Request,
     credentials: AdminLogin, 
@@ -186,7 +186,7 @@ async def login_admin(
     return Token(**token_data)
 
 @router.post("/login/user", response_model=Token)
-@limiter.limit("5/minute")
+# @limiter.limit("5/minute")
 async def login_user(
     request: Request,
     credentials: UserLogin, 
@@ -208,7 +208,7 @@ async def login_user(
 # === Form-Based Login for Swagger UI ===
 
 @router.post("/login/form", response_model=Token)
-@limiter.limit("5/minute")
+# @limiter.limit("5/minute")
 async def login_form(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
