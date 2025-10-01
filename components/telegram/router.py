@@ -10,7 +10,7 @@ import logging
 import httpx
 import os
 import json
-
+from datetime import datetime
 # --- api.video Imports ---
 import apivideo
 from apivideo.exceptions import ApiException
@@ -58,13 +58,28 @@ async def download_telegram_file(file_path: str, destination: str):
                     f.write(chunk)
 
 # --- THE FINAL UPLOAD FUNCTION ---
-async def upload_to_api_video(local_file_path: str, video_title: str) -> str:
+# --- THE FINAL UPLOAD FUNCTION ---
+async def upload_to_api_video(local_file_path: str, video_title: str, description: str = None) -> str:
     video_upload_response_object = None
     try:
         with apivideo.AuthenticatedApiClient(settings.API_VIDEO_KEY) as client:
             videos_api_instance = VideosApi(client)
             
-            video_payload = {"title": video_title}
+            video_payload = {
+                "title": video_title,
+                "description": description if description else f"Video submission - {video_title}",
+                "tags": ["telegram_submission", "user_generated"]
+            }
+            
+            # Add metadata if description exists
+            if description:
+                from datetime import datetime  # Add this import
+                video_payload["metadata"] = [
+                    {"key": "source", "value": "telegram"},
+                    {"key": "user_description", "value": description},
+                    {"key": "upload_date", "value": str(datetime.now().isoformat())}
+                ]
+            
             video_container = videos_api_instance.create(video_payload)
             
             video_id = video_container.video_id
@@ -86,6 +101,7 @@ async def upload_to_api_video(local_file_path: str, video_title: str) -> str:
             os.remove(local_file_path)
             logger.info(f"Cleaned up temporary file: {local_file_path}")
 
+
 # --- Final Webhook Endpoint ---
 @router.post(WEBHOOK_PATH, include_in_schema=False)
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
@@ -106,41 +122,71 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         if not video_data:
             return {"status": "ok, not a video submission"}
 
-        existing_submission = (await db.execute(select(VideoSubmission).where(VideoSubmission.telegram_file_id == video_data['file_id']))).scalars().first()
+        # 🆕 CAPTURE CAPTION AND MESSAGE INFO
+        caption = message.get('caption', '').strip()
+        message_id = message.get('message_id')
+        
+        # Log the captured information
+        logger.info(f"📝 Video received with caption: '{caption}'")
+        logger.info(f"📱 Message ID: {message_id}")
+
+        existing_submission = (await db.execute(
+            select(VideoSubmission).where(VideoSubmission.telegram_file_id == video_data['file_id'])
+        )).scalars().first()
+        
         if existing_submission:
             logger.warning(f"Submission with telegram_file_id {video_data['file_id']} already exists. Skipping.")
             return {"status": "ok, duplicate submission"}
 
         volunteer = await get_or_create_volunteer(message['chat'], db)
 
+        # 🆕 CREATE SUBMISSION WITH DESCRIPTION DATA
         submission = VideoSubmission(
             telegram_file_id=video_data['file_id'],
             volunteer_id=volunteer.id,
-            status=SubmissionStatus.PROCESSING
+            status=SubmissionStatus.PROCESSING,
+            description=caption if caption else None,  # Save the caption
+            telegram_message_id=message_id,  # Save message reference
+            submission_metadata={
+                'file_name': video_data.get('file_name'),
+                'file_size': video_data.get('file_size'),
+                'duration': video_data.get('duration'),
+                'mime_type': video_data.get('mime_type'),
+                'original_chat_id': message['chat']['id'],
+                'has_caption': bool(caption)
+            }
         )
         db.add(submission)
         await db.commit()
         await db.refresh(submission)
 
+        # Rest of your existing logic...
         file_path = await get_telegram_file_path(video_data['file_id'])
         file_name = video_data.get('file_name', f"{video_data['file_unique_id']}.mp4")
         local_dest = f"./temp_{file_name}"
         await download_telegram_file(file_path, local_dest)
 
+        # Enhanced video title with description
+        video_title = f"Submission from {volunteer.username or volunteer.first_name}"
+        if caption:
+            # Add first 50 characters of caption to title
+            video_title += f" - {caption[:50]}{'...' if len(caption) > 50 else ''}"
+
         final_url = await upload_to_api_video(
             local_file_path=local_dest,
-            video_title=f"Submission from {volunteer.username or volunteer.first_name}"
+            video_title=video_title,
+            description=caption if caption else None
         )
 
         submission.video_platform_url = final_url
         submission.status = SubmissionStatus.PENDING_REVIEW
         await db.commit()
         
-        logger.info(f"--- WEBHOOK COMPLETED SUCCESSFULLY for submission {submission.id} ---")
+        logger.info(f"✅ WEBHOOK COMPLETED SUCCESSFULLY for submission {submission.id}")
+        logger.info(f"📝 Description saved: '{submission.description}'")
         return {"status": "ok"}
 
     except Exception as e:
         logger.error(f"--- FATAL ERROR in webhook processing: {type(e).__name__} - {e} ---", exc_info=True)
         await db.rollback()
         return {"status": "internal server error"}, 500
-
