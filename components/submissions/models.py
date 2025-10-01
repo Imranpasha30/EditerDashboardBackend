@@ -1,5 +1,5 @@
-from sqlalchemy import Column, String, DateTime, Enum as SQLAlchemyEnum, ForeignKey, Integer, Boolean
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, DateTime, Enum as SQLAlchemyEnum, ForeignKey, Integer, Boolean, BigInteger, Text
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from core.base import Base 
 import uuid
 from datetime import datetime
@@ -55,7 +55,10 @@ class VideoSubmission(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-
+    description = Column(Text, nullable=True)  # For video caption/description from Telegram
+    telegram_message_id = Column(BigInteger, nullable=True)  # Reference to original Telegram message
+    submission_metadata = Column(JSONB, nullable=True, default={})  # Additional metadata like file size, duration etc.
+    
 
     volunteer = relationship("Volunteer", back_populates="video_submissions")
     assignments = relationship("VideoAssignment", back_populates="video_submission")
