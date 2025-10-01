@@ -35,6 +35,9 @@ class ManagerService:
                     VideoAssignment.revision_notes,  # Add revision notes
                     VideoAssignment.manager_notes,   # Add manager notes
                     VideoAssignment.assigned_at,     # Add assigned date
+                    VideoSubmission.description,  # ✅ Make sure this is included
+                    VideoSubmission.telegram_message_id,  # ✅ Make sure this is included
+                    VideoSubmission.submission_metadata, 
                     User.full_name.label('assigned_editor_name')
                 )
                 .join(Volunteer, VideoSubmission.volunteer_id == Volunteer.id)
@@ -60,9 +63,9 @@ class ManagerService:
                     "manager_notes": sub.manager_notes,
                     "assigned_at": sub.assigned_at.isoformat() if sub.assigned_at else None,
                     "decline_reason": sub.decline_reason,
-                    "description": sub.VideoSubmission.description,  # 🆕 ADD THIS LINE
-                    "telegram_message_id": sub.VideoSubmission.telegram_message_id,  # 🆕 ADD THIS LINE
-                    "submission_metadata": sub.VideoSubmission.submission_metadata  # 🆕 BONUS
+                    "description": sub.description,  # ✅ CORRECT
+                    "telegram_message_id": sub.telegram_message_id,  # ✅ CORRECT
+                    "submission_metadata": sub.submission_metadata  # ✅ CORRECT
 
                 }
                 for sub in submissions
