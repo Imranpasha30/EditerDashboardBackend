@@ -59,7 +59,11 @@ class ManagerService:
                     "revision_notes": sub.revision_notes,
                     "manager_notes": sub.manager_notes,
                     "assigned_at": sub.assigned_at.isoformat() if sub.assigned_at else None,
-                    "decline_reason": sub.decline_reason
+                    "decline_reason": sub.decline_reason,
+                    "description": sub.VideoSubmission.description,  # 🆕 ADD THIS LINE
+                    "telegram_message_id": sub.VideoSubmission.telegram_message_id,  # 🆕 ADD THIS LINE
+                    "submission_metadata": sub.VideoSubmission.submission_metadata  # 🆕 BONUS
+
                 }
                 for sub in submissions
             ]
