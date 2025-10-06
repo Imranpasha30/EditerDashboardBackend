@@ -91,7 +91,7 @@ class TelegramService:
 
 Unfortunately, your recent video submission has been declined by our review team.
 
-<b>🎥 Declined Video:</b>
+<b>🎥 your Declined Video:</b>
 {video_link}
 
 <b>📝 Reason:</b>
