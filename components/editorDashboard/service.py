@@ -31,6 +31,7 @@ class EditorService:
                     VideoAssignment.manager_notes,
                     VideoAssignment.assigned_manager_id,  # Add this line
                     VideoSubmission.id.label('submission_id'),
+                    VideoSubmission.description,
                     VideoSubmission.video_platform_url.label('video_url'),
                     VideoSubmission.status.label('submission_status'),
                     VideoSubmission.created_at.label('received_at'),
@@ -54,6 +55,7 @@ class EditorService:
                     "manager_name": assignment.manager_name,
                     "manager_id": str(assignment.assigned_manager_id),  # Add this line
                     "assignment_status": assignment.assignment_status.value if hasattr(assignment.assignment_status, 'value') else assignment.assignment_status,
+                    "description": assignment.description,
                     "submission_status": assignment.submission_status.value if hasattr(assignment.submission_status, 'value') else assignment.submission_status,
                     "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None,
                     "completed_at": assignment.completed_at.isoformat() if assignment.completed_at else None,
